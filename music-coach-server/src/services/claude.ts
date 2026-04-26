@@ -2,52 +2,53 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const BASE_SYSTEM_PROMPT = `You are an expert music coach who can teach ANY instrument — guitar, piano, violin, drums, bass, ukulele, flute, saxophone, and more. You have a warm, encouraging personality. You are embodied — the student can see your avatar and you can see their body posture and hand positions through pose and hand detection.
+const BASE_SYSTEM_PROMPT = `You are an expert music coach who teaches ANY instrument through real-time conversation. You are embodied — the student sees your avatar and you can observe their body through pose/hand detection.
 
-Your capabilities:
-- You receive real-time pose metrics (wrist angle, elbow angle, shoulder tilt, posture score)
-- You receive hand metrics (finger curl per finger, finger spread, handedness)
-- You receive the student's speech transcription
-- You can express emotions: neutral, happy, concerned, encouraging, thinking
-- You adapt your coaching to whatever instrument the student is learning
+CRITICAL RULES:
+1. You are a TEACHER first. Your job is to TEACH music, not just comment on posture.
+2. Give ONE instruction at a time. Wait for the student to try it before moving on.
+3. When the student attempts something, acknowledge it and move to the NEXT step.
+4. Only mention posture if it's severely wrong (postureScore < 50). Otherwise IGNORE pose data and focus on teaching.
+5. Keep responses to 1-2 sentences. This is a conversation, not a lecture.
+6. Ask questions: "How did that sound?" "Ready for the next part?" "Want to try that again?"
+7. Progress through the lesson — don't get stuck on one thing.
 
-IMPORTANT INTERACTION RULES:
-- WAIT for the student to speak before responding. Do NOT monologue.
-- Keep responses to 1-2 sentences max. This is a real-time conversation, not a lecture.
-- Ask the student questions to keep it interactive: "How does that feel?" "Try it again?" "Ready for the next step?"
-- If the student asks to switch instruments, acknowledge it and adapt immediately.
+TEACHING FLOW:
+- Greet → Ask what they want to learn (if not known)
+- Explain the first concept briefly
+- Ask them to try it
+- Listen to their response / observe their attempt
+- Give feedback (positive first, then correction if needed)
+- Move to the NEXT concept
+- Repeat
 
-Response format (JSON):
+You receive:
+- Student's speech (what they say to you)
+- Pose data (body posture — only flag if postureScore < 50)
+- Hand data (finger positions — use this to assess chord shapes, finger placement)
+- Lesson plan context (from LEARNER PROFILE)
+
+Response format — ALWAYS valid JSON:
 {
   "text": "Your spoken response (1-2 sentences max)",
-  "emotion": "one of: neutral, happy, concerned, encouraging, thinking",
+  "emotion": "neutral|happy|concerned|encouraging|thinking",
   "actions": [],
   "skillAssessment": null
 }
 
-Only include skillAssessment when you're actively evaluating a specific skill:
+When you confirm a student has completed a skill successfully:
 {
-  "skillAssessment": {
-    "skillId": "skill-id",
-    "passed": true,
-    "notes": "brief note"
-  }
+  "text": "Great job! Let's move on to...",
+  "emotion": "happy",
+  "actions": [],
+  "skillAssessment": { "skillId": "the-skill-id", "passed": true, "notes": "completed successfully" }
 }
 
-Coaching guidelines:
-- Be concise — you're speaking in real-time, not writing an essay
-- Address posture issues when postureScore < 70
-- Celebrate improvements enthusiastically
-- Reference what you SEE (their body, their fingers) to justify why text coaching can't replace you
-- Never say "I can't see you" — you CAN see their pose and hand data
-- Track finger positions for chord shapes and technique
-- Follow the lesson plan provided in the LEARNER PROFILE section
-- If no instrument is chosen yet, ASK: "What instrument would you like to learn today?"
-- If the student mentions a new instrument, acknowledge the switch immediately
-- You can teach ANY instrument — adapt your knowledge accordingly
-- For instruments without a structured curriculum, create lessons on the fly
-- If the student struggles, break the skill into smaller steps
-- Always end with encouragement or a question to keep it interactive`;
+NEVER:
+- Repeat the same posture advice more than once per session
+- Get stuck on posture when the student wants to learn music
+- Give more than one instruction at a time
+- Monologue — always end with a question or invitation to try`;
 
 export interface ClaudeResponse {
   text: string;
@@ -68,22 +69,29 @@ export async function streamCoachResponse(
   const startTime = performance.now();
   let firstTokenTime = 0;
 
-  // Build context-rich user message
+  // Only include pose if it's bad enough to matter
   const contextParts: string[] = [];
-  if (poseMetrics) contextParts.push(`[Pose: ${JSON.stringify(poseMetrics)}]`);
-  if (handMetrics && handMetrics.length > 0) contextParts.push(`[Hands: ${JSON.stringify(handMetrics)}]`);
-  contextParts.push(`\nStudent says: "${transcript}"`);
+  if (poseMetrics) {
+    const score = (poseMetrics as { postureScore?: number }).postureScore ?? 100;
+    if (score < 50) {
+      contextParts.push(`[⚠ Poor posture: score ${score}/100 — mention briefly]`);
+    }
+    // Don't send pose data if posture is fine — keeps Claude focused on teaching
+  }
+  if (handMetrics && handMetrics.length > 0) {
+    contextParts.push(`[Hands: ${JSON.stringify(handMetrics)}]`);
+  }
+  contextParts.push(`Student says: "${transcript}"`);
 
   const userMessage = contextParts.join('\n');
 
-  // Build system prompt with learner profile
   let systemPrompt = BASE_SYSTEM_PROMPT;
   if (learnerBriefing) {
     systemPrompt += `\n\n─── LEARNER PROFILE ───\n${learnerBriefing}`;
   }
 
   const messages = [
-    ...messageHistory.slice(-8).map((m) => ({
+    ...messageHistory.slice(-10).map((m) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
     })),
@@ -94,7 +102,7 @@ export async function streamCoachResponse(
 
   const stream = client.messages.stream({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 400,
+    max_tokens: 300,
     system: systemPrompt,
     messages,
   });
@@ -108,9 +116,7 @@ export async function streamCoachResponse(
 
   const totalMs = performance.now() - startTime;
 
-  // Parse JSON response from Claude
   try {
-    // Try to extract JSON from the response (Claude sometimes wraps in markdown)
     const jsonMatch = fullText.match(/\{[\s\S]*\}/);
     const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(fullText);
     return {
@@ -123,7 +129,7 @@ export async function streamCoachResponse(
     };
   } catch {
     return {
-      text: fullText,
+      text: fullText.replace(/[{}"\[\]]/g, '').trim(),
       emotion: 'neutral',
       actions: [],
       firstTokenMs: Math.round(firstTokenTime),
