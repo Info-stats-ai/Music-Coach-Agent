@@ -1,5 +1,4 @@
-import { ChromaClient, Collection } from 'chromadb';
-import { v4 as uuid } from 'uuid';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import {
   getNextLesson,
   formatLessonForCoach,
@@ -7,31 +6,33 @@ import {
   type Lesson,
 } from '../data/curriculum.js';
 
-const chroma = new ChromaClient({ path: 'http://localhost:8000' });
+const DB_PATH = './progress.json';
 
-let progressCollection: Collection | null = null;
-let skillsCollection: Collection | null = null;
-
-async function ensureCollections() {
-  if (progressCollection && skillsCollection) return;
-
-  progressCollection = await chroma.getOrCreateCollection({
-    name: 'learning_progress',
-    metadata: { description: 'Tracks what the student has learned per session' },
-  });
-
-  skillsCollection = await chroma.getOrCreateCollection({
-    name: 'skill_assessments',
-    metadata: { description: 'Individual skill assessment records' },
-  });
-
-  console.log('[Progress] ✓ ChromaDB collections ready');
+interface ProgressDB {
+  sessions: SessionSummary[];
+  skills: SkillRecord[];
 }
 
-// Initialize on module load
-ensureCollections();
+interface SkillRecord {
+  userId: string;
+  skillId: string;
+  passed: boolean;
+  notes: string;
+  timestamp: number;
+}
 
-// ─── Progress Recording ───
+function loadDB(): ProgressDB {
+  if (existsSync(DB_PATH)) {
+    return JSON.parse(readFileSync(DB_PATH, 'utf-8'));
+  }
+  return { sessions: [], skills: [] };
+}
+
+function saveDB(db: ProgressDB) {
+  writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+}
+
+console.log('[Progress] ✓ Using local JSON store');
 
 export interface SessionSummary {
   userId: string;
@@ -47,58 +48,23 @@ export interface SessionSummary {
 }
 
 export async function recordSessionProgress(summary: SessionSummary): Promise<void> {
-  await ensureCollections();
-
-  const document = `Session on ${new Date(summary.timestamp).toLocaleDateString()}: ` +
-    `Lesson "${summary.lessonTitle}" (${summary.instrument}). ` +
-    `Skills passed: ${summary.skillsPassed.join(', ') || 'none'}. ` +
-    `Needs work: ${summary.skillsNeedWork.join(', ') || 'none'}. ` +
-    `Coach notes: ${summary.coachNotes}`;
-
-  const metadata = {
-    userId: summary.userId,
-    instrument: summary.instrument,
-    lessonId: summary.lessonId,
-    timestamp: summary.timestamp,
-    skillsPassed: JSON.stringify(summary.skillsPassed),
-    skillsNeedWork: JSON.stringify(summary.skillsNeedWork),
-    durationMinutes: summary.sessionDurationMinutes,
-  };
-
-  await progressCollection!.add({
-    ids: [uuid()],
-    documents: [document],
-    metadatas: [metadata],
-  });
-
-  console.log(`[Progress] Stored session for ${summary.userId}: ${summary.lessonTitle}`);
+  const db = loadDB();
+  db.sessions.push(summary);
+  saveDB(db);
+  console.log(`[Progress] Saved session: ${summary.lessonTitle}`);
 }
 
 export async function recordSkillAssessment(
   userId: string,
   skillId: string,
-  skillName: string,
+  _skillName: string,
   passed: boolean,
   notes: string
 ): Promise<void> {
-  await ensureCollections();
-
-  const document = `Skill "${skillName}" (${skillId}): ${passed ? 'PASSED' : 'NEEDS WORK'}. ${notes}`;
-  const metadata = {
-    userId,
-    skillId,
-    passed: passed ? 'true' : 'false',
-    timestamp: Date.now(),
-  };
-
-  await skillsCollection!.add({
-    ids: [uuid()],
-    documents: [document],
-    metadatas: [metadata],
-  });
+  const db = loadDB();
+  db.skills.push({ userId, skillId, passed, notes, timestamp: Date.now() });
+  saveDB(db);
 }
-
-// ─── RAG: Query Progress for Session Planning ───
 
 export interface LearnerProfile {
   userId: string;
@@ -113,80 +79,39 @@ export interface LearnerProfile {
 }
 
 export async function getLearnerProfile(userId: string, instrument: string): Promise<LearnerProfile> {
-  await ensureCollections();
+  const db = loadDB();
 
-  let completedLessons: string[] = [];
-  let passedSkills: string[] = [];
-  let weakSkills: string[] = [];
-  let totalSessions = 0;
-  let recentHistory = '';
+  const userSessions = db.sessions.filter((s) => s.userId === userId && s.instrument === instrument);
+  const userSkills = db.skills.filter((s) => s.userId === userId);
 
-  try {
-    const results = await progressCollection!.query({
-      queryTexts: [`${instrument} learning progress for student`],
-      nResults: 20,
-      where: { userId },
-    });
+  const passedSkills = [...new Set(userSkills.filter((s) => s.passed).map((s) => s.skillId))];
+  const failedSkills = [...new Set(userSkills.filter((s) => !s.passed).map((s) => s.skillId))];
+  const weakSkills = failedSkills.filter((s) => !passedSkills.includes(s));
 
-    if (results.documents?.[0]) {
-      totalSessions = results.documents[0].length;
-      recentHistory = (results.documents[0] as string[]).slice(-5).join('\n');
+  const completedLessons = [...new Set(
+    userSessions.filter((s) => s.skillsPassed.length > 0).map((s) => s.lessonId)
+  )];
 
-      for (const meta of results.metadatas?.[0] || []) {
-        if (meta && meta.instrument === instrument) {
-          const passed = JSON.parse((meta.skillsPassed as string) || '[]');
-          const needWork = JSON.parse((meta.skillsNeedWork as string) || '[]');
-          passedSkills.push(...passed);
-          weakSkills.push(...needWork);
-          if (passed.length > 0) {
-            completedLessons.push(meta.lessonId as string);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[Progress] Query failed (new user?):', (err as Error).message);
-  }
-
-  // Deduplicate
-  completedLessons = [...new Set(completedLessons)];
-  passedSkills = [...new Set(passedSkills)];
-  weakSkills = [...new Set(weakSkills.filter((s) => !passedSkills.includes(s)))];
+  const recentHistory = userSessions
+    .slice(-5)
+    .map((s) => `${s.lessonTitle}: passed ${s.skillsPassed.join(',')||'none'}, needs work ${s.skillsNeedWork.join(',')||'none'}`)
+    .join('\n');
 
   const nextLesson = getNextLesson(instrument, completedLessons);
   const allLessons = getLessonsForInstrument(instrument);
+  const totalSessions = userSessions.length;
 
   let coachBriefing: string;
-
   if (totalSessions === 0) {
-    coachBriefing = `This is a NEW STUDENT starting ${instrument}. ` +
-      `Welcome them warmly and start with the very first lesson.\n\n` +
-      (nextLesson ? formatLessonForCoach(nextLesson) : 'No curriculum available.');
+    coachBriefing = `NEW STUDENT starting ${instrument}. Welcome them warmly.\n\n` +
+      (nextLesson ? formatLessonForCoach(nextLesson) : '');
   } else {
-    const progressPct = Math.round((completedLessons.length / allLessons.length) * 100);
-
-    coachBriefing = `RETURNING STUDENT — ${totalSessions} sessions completed.\n` +
-      `Progress: ${completedLessons.length}/${allLessons.length} lessons (${progressPct}%)\n` +
-      `Skills mastered: ${passedSkills.join(', ') || 'none yet'}\n` +
-      `Skills needing work: ${weakSkills.join(', ') || 'none'}\n\n` +
-      `Recent history:\n${recentHistory}\n\n` +
-      (weakSkills.length > 0
-        ? `PRIORITY: Review weak skills (${weakSkills.join(', ')}) before moving on.\n\n`
-        : '') +
-      (nextLesson
-        ? formatLessonForCoach(nextLesson)
-        : 'All lessons completed! Focus on refinement and practice.');
+    const pct = Math.round((completedLessons.length / allLessons.length) * 100);
+    coachBriefing = `RETURNING STUDENT — ${totalSessions} sessions, ${pct}% complete.\n` +
+      `Mastered: ${passedSkills.join(', ') || 'none'}\nWeak: ${weakSkills.join(', ') || 'none'}\n` +
+      `Recent:\n${recentHistory}\n\n` +
+      (nextLesson ? formatLessonForCoach(nextLesson) : 'All done! Refine skills.');
   }
 
-  return {
-    userId,
-    instrument,
-    completedLessons,
-    passedSkills,
-    weakSkills,
-    totalSessions,
-    recentHistory,
-    nextLesson,
-    coachBriefing,
-  };
+  return { userId, instrument, completedLessons, passedSkills, weakSkills, totalSessions, recentHistory, nextLesson, coachBriefing };
 }

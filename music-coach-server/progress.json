@@ -1,0 +1,17 @@
+{
+  "sessions": [
+    {
+      "userId": "user_default",
+      "instrument": "guitar",
+      "lessonId": "guitar-1-1",
+      "lessonTitle": "guitar-1-1",
+      "skillsWorkedOn": [],
+      "skillsPassed": [],
+      "skillsNeedWork": [],
+      "coachNotes": "Session lasted 1 min with 15 exchanges.",
+      "sessionDurationMinutes": 1,
+      "timestamp": 1777242430992
+    }
+  ],
+  "skills": []
+}

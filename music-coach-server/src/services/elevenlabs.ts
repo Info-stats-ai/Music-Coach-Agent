@@ -14,10 +14,6 @@ export interface TTSResult {
   usedFallback: boolean;
 }
 
-/**
- * Stream TTS audio from ElevenLabs.
- * Returns timing metrics. If ElevenLabs fails, returns empty with fallback flag.
- */
 export async function streamTTS(
   text: string,
   onChunk: (chunk: Buffer, isFinal: boolean) => void
@@ -26,33 +22,34 @@ export async function streamTTS(
 
   try {
     let firstChunkTime = 0;
-    const chunks: Buffer[] = [];
+    const allChunks: Buffer[] = [];
 
+    // Use mp3 so browser can decode it directly
     const audioStream = await client.textToSpeech.convertAsStream(VOICE_ID, {
       text,
       model_id: MODEL_ID,
-      output_format: 'pcm_16000',
+      output_format: 'mp3_44100_128',
       voice_settings: {
         stability: 0.5,
         similarity_boost: 0.75,
       },
     });
 
-    const allChunks: Buffer[] = [];
-
     for await (const chunk of audioStream) {
       const buf = Buffer.from(chunk);
       if (!firstChunkTime) firstChunkTime = performance.now() - startTime;
       allChunks.push(buf);
-      chunks.push(buf);
     }
 
-    for (let i = 0; i < allChunks.length; i++) {
-      onChunk(allChunks[i], i === allChunks.length - 1);
-    }
+    // Combine all chunks into one buffer and send as single chunk
+    // (mp3 decoding works better with complete data)
+    const fullAudio = Buffer.concat(allChunks);
+    onChunk(fullAudio, true);
+
+    console.log(`[TTS] ✓ Generated ${fullAudio.length} bytes mp3`);
 
     return {
-      chunks,
+      chunks: [fullAudio],
       firstChunkMs: Math.round(firstChunkTime),
       totalMs: Math.round(performance.now() - startTime),
       usedFallback: false,

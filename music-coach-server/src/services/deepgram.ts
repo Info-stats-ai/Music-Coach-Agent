@@ -16,7 +16,8 @@ export interface TranscriptionResult {
 }
 
 /**
- * Create a live Deepgram STT connection for a socket session.
+ * Create a live Deepgram STT connection.
+ * Handles reconnection and keepalive.
  */
 export function createLiveTranscription(
   onTranscript: (result: TranscriptionResult) => void,
@@ -24,76 +25,121 @@ export function createLiveTranscription(
 ) {
   const startTime = Date.now();
   let isOpen = false;
-  let audioQueue: Buffer[] = [];
-
-  console.log('[Deepgram] Creating live transcription connection...');
-
-  const connection = deepgram.listen.live({
-    model: 'nova-2',
-    language: 'en',
-    smart_format: true,
-    interim_results: true,
-    utterance_end_ms: 1000,
-    vad_events: true,
-    encoding: 'linear16',
-    sample_rate: 16000,
-    channels: 1,
-  });
-
-  connection.on(LiveTranscriptionEvents.Open, () => {
-    console.log('[Deepgram] ✓ Connection opened');
-    isOpen = true;
-    // Flush queued audio
-    for (const buf of audioQueue) {
-      connection.send(new Uint8Array(buf) as unknown as ArrayBuffer);
-    }
-    audioQueue = [];
-  });
-
-  connection.on(LiveTranscriptionEvents.Close, () => {
-    console.log('[Deepgram] Connection closed');
-    isOpen = false;
-  });
-
-  connection.on(LiveTranscriptionEvents.Transcript, (data) => {
-    const transcript = data.channel?.alternatives?.[0];
-    if (transcript && transcript.transcript.trim()) {
-      console.log(`[Deepgram] Transcript: "${transcript.transcript}" (final=${data.is_final}, conf=${transcript.confidence})`);
-      onTranscript({
-        text: transcript.transcript,
-        isFinal: data.is_final ?? false,
-        confidence: transcript.confidence ?? 0,
-        latencyMs: Date.now() - startTime,
-      });
-    }
-  });
-
-  connection.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error('[Deepgram] Error:', err);
-    onError(new Error(`Deepgram error: ${err.message || JSON.stringify(err)}`));
-  });
-
   let chunkCount = 0;
+  let audioQueue: Buffer[] = [];
+  let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+  let connection: ReturnType<typeof deepgram.listen.live> | null = null;
+
+  function createConnection() {
+    console.log('[Deepgram] Creating connection...');
+
+    connection = deepgram.listen.live({
+      model: 'nova-2',
+      language: 'en',
+      smart_format: true,
+      interim_results: true,
+      utterance_end_ms: 1500,
+      vad_events: true,
+      encoding: 'linear16',
+      sample_rate: 16000,
+      channels: 1,
+    });
+
+    connection.on(LiveTranscriptionEvents.Open, () => {
+      console.log('[Deepgram] ✓ Connection opened');
+      isOpen = true;
+
+      // Send keepalive every 8 seconds to prevent timeout
+      if (keepAliveInterval) clearInterval(keepAliveInterval);
+      keepAliveInterval = setInterval(() => {
+        if (connection && isOpen) {
+          try {
+            connection.keepAlive();
+          } catch {
+            // ignore keepalive errors
+          }
+        }
+      }, 8000);
+
+      // Flush queued audio
+      for (const buf of audioQueue) {
+        try {
+          connection!.send(new Uint8Array(buf) as unknown as ArrayBuffer);
+        } catch { /* ignore */ }
+      }
+      audioQueue = [];
+    });
+
+    connection.on(LiveTranscriptionEvents.Close, () => {
+      console.log('[Deepgram] Connection closed, will reconnect on next audio');
+      isOpen = false;
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+        keepAliveInterval = null;
+      }
+    });
+
+    connection.on(LiveTranscriptionEvents.Transcript, (data) => {
+      const transcript = data.channel?.alternatives?.[0];
+      if (transcript && transcript.transcript.trim()) {
+        console.log(`[Deepgram] "${transcript.transcript}" (final=${data.is_final})`);
+        onTranscript({
+          text: transcript.transcript,
+          isFinal: data.is_final ?? false,
+          confidence: transcript.confidence ?? 0,
+          latencyMs: Date.now() - startTime,
+        });
+      }
+    });
+
+    connection.on(LiveTranscriptionEvents.Error, (err) => {
+      console.error('[Deepgram] Error:', err);
+      isOpen = false;
+      onError(new Error(`Deepgram: ${err.message || JSON.stringify(err)}`));
+    });
+  }
+
+  // Don't create connection immediately — wait for first audio chunk
+  // This prevents the connection from timing out before user starts speaking
 
   return {
     send(audioChunk: ArrayBuffer) {
       const buf = Buffer.from(audioChunk);
       chunkCount++;
-      if (chunkCount % 50 === 1) {
-        console.log(`[Deepgram] Audio chunk #${chunkCount} (${buf.length} bytes, open=${isOpen})`);
+
+      // Create connection on first audio chunk
+      if (!connection) {
+        createConnection();
       }
 
-      if (isOpen) {
-        connection.send(new Uint8Array(buf) as unknown as ArrayBuffer);
+      if (chunkCount % 100 === 1) {
+        console.log(`[Deepgram] Chunk #${chunkCount} (${buf.length}b, open=${isOpen})`);
+      }
+
+      if (isOpen && connection) {
+        try {
+          connection.send(new Uint8Array(buf) as unknown as ArrayBuffer);
+        } catch {
+          audioQueue.push(buf);
+        }
       } else {
-        // Queue audio until connection opens
         audioQueue.push(buf);
+        // If connection closed, try to reconnect
+        if (connection && !isOpen) {
+          console.log('[Deepgram] Reconnecting...');
+          connection = null;
+          createConnection();
+        }
       }
     },
     close() {
       console.log(`[Deepgram] Closing (sent ${chunkCount} chunks)`);
       isOpen = false;
-      connection.requestClose();
+      if (keepAliveInterval) clearInterval(keepAliveInterval);
+      try {
+        connection?.requestClose();
+      } catch { /* ignore */ }
+      connection = null;
     },
   };
 }

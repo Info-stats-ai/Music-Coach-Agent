@@ -1,20 +1,24 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import {
-  AvatarSDK,
-  AvatarManager,
-  AvatarView,
-  DrivingServiceMode,
-  Environment,
-} from '@spatialwalk/avatarkit';
 import { useAppStore } from '@/store/useAppStore';
+
+/**
+ * SpatialReal Avatar — SDK Mode.
+ * Dynamically imports @spatialwalk/avatarkit to avoid crashing if SDK has issues.
+ * Receives TTS audio via CustomEvent and forwards to avatar for lip-sync.
+ */
 
 type SpatialRealStatus = 'idle' | 'initializing' | 'connecting' | 'connected' | 'error';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sdk: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let avatarViewInstance: any = null;
+
 export function SpatialRealAvatar() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const avatarViewRef = useRef<AvatarView | null>(null);
   const [status, setStatus] = useState<SpatialRealStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const autoConnectDone = useRef(false);
 
   const emotion = useAppStore((s) => s.currentEmotion);
   const isSpeaking = useAppStore((s) => s.isSpeaking);
@@ -30,6 +34,13 @@ export function SpatialRealAvatar() {
 
     try {
       setStatus('initializing');
+
+      // Dynamic import to avoid breaking the app if SDK fails
+      if (!sdk) {
+        sdk = await import('@spatialwalk/avatarkit');
+      }
+
+      const { AvatarSDK, AvatarManager, AvatarView, Environment, DrivingServiceMode } = sdk;
 
       if (!AvatarSDK.isInitialized) {
         await AvatarSDK.initialize(appId, {
@@ -52,30 +63,35 @@ export function SpatialRealAvatar() {
       await view.controller.start();
       await new Promise((r) => setTimeout(r, 500));
 
-      avatarViewRef.current = view;
+      avatarViewInstance = view;
       setStatus('connected');
+      console.log('[SpatialReal] ✓ Avatar connected');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'SpatialReal connection failed');
+      const msg = err instanceof Error ? err.message : 'Connection failed';
+      console.error('[SpatialReal] Error:', msg);
+      setError(msg);
       setStatus('error');
     }
   }, [isConfigured, appId, avatarId, sessionToken, status]);
 
-  // Auto-connect when configured
+  // Auto-connect once
   useEffect(() => {
-    if (isConfigured && status === 'idle') {
+    if (isConfigured && status === 'idle' && !autoConnectDone.current) {
+      autoConnectDone.current = true;
       connect();
     }
   }, [isConfigured, status, connect]);
 
-  // Forward TTS audio to SpatialReal for lip-sync
+  // Forward TTS audio to avatar for lip-sync
   useEffect(() => {
     const handler = (e: Event) => {
-      const { audio, isFinal } = (e as CustomEvent).detail as {
-        audio: ArrayBuffer;
-        isFinal: boolean;
-      };
-      if (avatarViewRef.current && status === 'connected') {
-        avatarViewRef.current.controller.send(audio, isFinal);
+      const { audio, isFinal } = (e as CustomEvent).detail;
+      if (avatarViewInstance && status === 'connected') {
+        try {
+          avatarViewInstance.controller.send(audio, isFinal);
+        } catch {
+          // ignore send errors
+        }
       }
     };
     window.addEventListener('spatialreal:audio', handler);
@@ -85,9 +101,11 @@ export function SpatialRealAvatar() {
   // Cleanup
   useEffect(() => {
     return () => {
-      avatarViewRef.current?.controller.close();
-      avatarViewRef.current?.dispose();
-      avatarViewRef.current = null;
+      try {
+        avatarViewInstance?.controller?.close();
+        avatarViewInstance?.dispose();
+      } catch { /* ignore */ }
+      avatarViewInstance = null;
     };
   }, []);
 
@@ -122,13 +140,9 @@ export function SpatialRealAvatar() {
 
       {!isConfigured && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-          <div className="text-center px-6 space-y-2">
-            <p className="text-yellow-400 text-sm">SpatialReal not configured</p>
-            <p className="text-gray-500 text-xs">
-              Set VITE_SPATIALREAL_APP_ID, VITE_SPATIALREAL_AVATAR_ID, and
-              VITE_SPATIALREAL_SESSION_TOKEN in your .env
-            </p>
-          </div>
+          <p className="text-gray-500 text-xs px-4 text-center">
+            SpatialReal not configured — set env vars
+          </p>
         </div>
       )}
     </div>
