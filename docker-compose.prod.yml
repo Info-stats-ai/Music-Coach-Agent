@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: ./music-coach
+    ports:
+      - '80:80'
+    depends_on:
+      - backend
+
+  backend:
+    build: ./music-coach-server
+    ports:
+      - '3001:3001'
+    env_file:
+      - ./music-coach-server/.env
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+volumes:
+  redis-data:
