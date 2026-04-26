@@ -54,28 +54,35 @@ socket.on('coach_response', (data: CoachResponse) => {
   });
 });
 
-socket.on('tts_audio_chunk', (chunk: ArrayBuffer) => {
-  // Forward to SpatialReal for lip-sync
+// PCM audio → SpatialReal for lip-sync
+socket.on('tts_pcm_chunk', (chunk: ArrayBuffer) => {
   window.dispatchEvent(
     new CustomEvent('spatialreal:audio', { detail: { audio: chunk, isFinal: false } })
   );
 });
 
-socket.on('tts_final_chunk', (chunk: ArrayBuffer) => {
-  // Play audio in browser
-  playMp3(chunk);
-  // Forward to SpatialReal for lip-sync
+socket.on('tts_pcm_final', (chunk: ArrayBuffer) => {
   window.dispatchEvent(
     new CustomEvent('spatialreal:audio', { detail: { audio: chunk, isFinal: true } })
   );
 });
 
+// WAV audio → browser playback (only if SpatialReal is NOT connected)
+socket.on('tts_wav', (wav: ArrayBuffer) => {
+  const win = window as unknown as { __spatialRealConnected?: boolean };
+  if (!win.__spatialRealConnected) {
+    playMp3(wav); // WAV is also decodable by decodeAudioData
+  }
+});
+
 socket.on('tts_start', () => useAppStore.getState().setSpeaking(true));
 socket.on('tts_end', () => useAppStore.getState().setSpeaking(false));
 
-    // Browser TTS fallback when ElevenLabs fails
+    // Browser TTS fallback — only when SpatialReal is NOT connected
     socket.on('use_browser_tts', (data: { text: string }) => {
-      console.log('[Coach] Browser TTS — speaking + routing to avatar');
+      const win = window as unknown as { __spatialRealConnected?: boolean };
+      if (win.__spatialRealConnected) return; // SpatialReal handles audio
+      console.log('[Coach] Browser TTS fallback');
       useAppStore.getState().setSpeaking(true);
       const utterance = new SpeechSynthesisUtterance(data.text);
       utterance.rate = 1.0;

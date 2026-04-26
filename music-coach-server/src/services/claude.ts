@@ -42,8 +42,12 @@ Coaching guidelines:
 - Never say "I can't see you" — you CAN see their pose and hand data
 - Track finger positions for chord shapes and technique
 - Follow the lesson plan provided in the LEARNER PROFILE section
+- If no instrument is chosen yet, ASK: "What instrument would you like to learn today?"
+- If the student mentions a new instrument, acknowledge the switch immediately
+- You can teach ANY instrument — adapt your knowledge accordingly
+- For instruments without a structured curriculum, create lessons on the fly
 - If the student struggles, break the skill into smaller steps
-- Always end with encouragement`;
+- Always end with encouragement or a question to keep it interactive`;
 
 export interface ClaudeResponse {
   text: string;

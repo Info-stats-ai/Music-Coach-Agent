@@ -65,6 +65,7 @@ export function SpatialRealAvatar() {
 
       avatarViewInstance = view;
       setStatus('connected');
+      (window as unknown as { __spatialRealConnected: boolean }).__spatialRealConnected = true;
       console.log('[SpatialReal] ✓ Avatar connected');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Connection failed';

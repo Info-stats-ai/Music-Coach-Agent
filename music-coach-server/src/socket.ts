@@ -33,19 +33,20 @@ export function setupSocketHandlers(io: Server) {
     let latestHandMetrics: Record<string, unknown>[] = [];
     let isProcessing = false;
     let learnerBriefing = '';
-    let currentInstrument = 'guitar';
+    let currentInstrument = ''; // empty = not chosen yet, coach will ask
     let currentLessonId = '';
     let skillsPassed: string[] = [];
     let skillsNeedWork: string[] = [];
     const sessionStartTime = Date.now();
 
-    // ─── Load learner profile (RAG) ───
-    (async () => {
+    // ─── Load learner profile (deferred until instrument is chosen) ───
+    const loadProfile = async (instrument: string) => {
+      currentInstrument = instrument;
       try {
-        const profile = await getLearnerProfile(userId, currentInstrument);
+        const profile = await getLearnerProfile(userId, instrument);
         learnerBriefing = profile.coachBriefing;
         currentLessonId = profile.nextLesson?.id || '';
-        console.log(`[RAG] Profile: ${profile.totalSessions} sessions, next=${currentLessonId}`);
+        console.log(`[RAG] Profile for ${instrument}: ${profile.totalSessions} sessions, next=${currentLessonId}`);
 
         socket.emit('learner_profile', {
           totalSessions: profile.totalSessions,
@@ -55,12 +56,25 @@ export function setupSocketHandlers(io: Server) {
           nextLesson: profile.nextLesson
             ? { id: profile.nextLesson.id, title: profile.nextLesson.title, level: profile.nextLesson.level }
             : null,
-          instrument: currentInstrument,
+          instrument,
         });
       } catch (err) {
         console.warn('[RAG] Profile load failed:', err);
+        learnerBriefing = `NEW STUDENT wants to learn ${instrument}. Welcome them and start teaching!`;
       }
+    };
 
+    // Don't load profile yet — wait for instrument selection
+    socket.emit('learner_profile', {
+      totalSessions: 0,
+      completedLessons: 0,
+      passedSkills: [],
+      weakSkills: [],
+      nextLesson: null,
+      instrument: '',
+    });
+    // Restore session
+    (async () => {
       const existing = await getSession(sessionId);
       if (existing) session = existing;
     })();
@@ -78,7 +92,24 @@ export function setupSocketHandlers(io: Server) {
       const pipelineStart = performance.now();
 
       try {
-        // Show final transcript to user
+        // Auto-detect instrument from speech
+        const instruments = ['guitar', 'piano', 'violin', 'drums', 'bass', 'ukulele', 'flute', 'saxophone', 'cello', 'trumpet', 'harmonica', 'banjo', 'mandolin', 'clarinet', 'trombone', 'harp', 'sitar', 'tabla'];
+        const lower = fullTranscript.toLowerCase();
+        for (const inst of instruments) {
+          if (lower.includes(inst) && (lower.includes('learn') || lower.includes('teach') || lower.includes('play') || lower.includes('practice') || lower.includes('want') || lower.includes('switch') || currentInstrument === '')) {
+            if (inst !== currentInstrument) {
+              console.log(`[Instrument] Detected "${inst}" from speech`);
+              await loadProfile(inst);
+            }
+            break;
+          }
+        }
+
+        // If no instrument chosen yet, set briefing to ask
+        if (!currentInstrument) {
+          learnerBriefing = 'The student has NOT chosen an instrument yet. Ask them: "What instrument would you like to learn today?"';
+        }
+
         socket.emit('user_transcript', { text: fullTranscript });
         session.messageHistory.push({ role: 'user', content: fullTranscript });
 
@@ -102,11 +133,19 @@ export function setupSocketHandlers(io: Server) {
           console.log(`[Skill] ${skillId}: ${passed ? 'PASSED ✓' : 'NEEDS WORK ✗'}`);
         }
 
-        // TTS → sends audio chunks to client for SpatialReal lip-sync
+        // TTS → PCM to SpatialReal for lip-sync, WAV to browser for playback
         socket.emit('tts_start');
-        const ttsResult = await streamTTS(coachResult.text, (chunk, isFinal) => {
-          socket.emit(isFinal ? 'tts_final_chunk' : 'tts_audio_chunk', chunk);
-        });
+        const ttsResult = await streamTTS(
+          coachResult.text,
+          (pcmChunk, isFinal) => {
+            // Raw PCM → SpatialReal avatar lip-sync
+            socket.emit(isFinal ? 'tts_pcm_final' : 'tts_pcm_chunk', pcmChunk);
+          },
+          (wav) => {
+            // WAV → browser audio playback
+            socket.emit('tts_wav', wav);
+          }
+        );
         socket.emit('tts_end');
 
         // If ElevenLabs failed, use browser TTS
@@ -190,20 +229,8 @@ export function setupSocketHandlers(io: Server) {
     });
 
     socket.on('set_instrument', async (instrument: string) => {
-      currentInstrument = instrument;
-      const profile = await getLearnerProfile(userId, instrument);
-      learnerBriefing = profile.coachBriefing;
-      currentLessonId = profile.nextLesson?.id || '';
-      socket.emit('learner_profile', {
-        totalSessions: profile.totalSessions,
-        completedLessons: profile.completedLessons.length,
-        passedSkills: profile.passedSkills,
-        weakSkills: profile.weakSkills,
-        nextLesson: profile.nextLesson
-          ? { id: profile.nextLesson.id, title: profile.nextLesson.title, level: profile.nextLesson.level }
-          : null,
-        instrument,
-      });
+      await loadProfile(instrument);
+      console.log(`[Session] Instrument set to ${instrument}`);
     });
 
     // ─── Disconnect: save progress ───
