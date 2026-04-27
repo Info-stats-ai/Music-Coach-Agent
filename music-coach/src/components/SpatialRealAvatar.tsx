@@ -83,28 +83,44 @@ export function SpatialRealAvatar() {
     }
   }, [isConfigured, status, connect]);
 
-  // Forward TTS audio to avatar for lip-sync
+  // Forward TTS audio to avatar for lip-sync — chunk it for real-time playback
   useEffect(() => {
     const handler = (e: Event) => {
       const { audio, isFinal } = (e as CustomEvent).detail;
-      if (avatarViewInstance) {
-        try {
-          // Ensure audio is ArrayBuffer (Socket.io may send as Buffer/Uint8Array)
-          let pcmBuffer: ArrayBuffer;
-          if (audio instanceof ArrayBuffer) {
-            pcmBuffer = audio;
-          } else if (audio instanceof Uint8Array || ArrayBuffer.isView(audio)) {
-            pcmBuffer = audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength);
-          } else {
-            pcmBuffer = new Uint8Array(audio).buffer;
-          }
-          console.log(`[SpatialReal] Sending ${pcmBuffer.byteLength}b PCM, final=${isFinal}`);
-          avatarViewInstance.controller.send(pcmBuffer, isFinal);
-        } catch (err) {
-          console.error('[SpatialReal] Send failed:', err);
-        }
+      if (!avatarViewInstance) {
+        console.warn('[SpatialReal] No avatar instance');
+        return;
+      }
+
+      // Convert to proper ArrayBuffer
+      let pcm: ArrayBuffer;
+      if (audio instanceof ArrayBuffer) {
+        pcm = audio;
+      } else if (ArrayBuffer.isView(audio)) {
+        pcm = audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength);
       } else {
-        console.warn('[SpatialReal] No avatar instance, audio dropped');
+        pcm = new Uint8Array(audio).buffer;
+      }
+
+      // Stream in small chunks (100ms of 16kHz 16-bit mono = 3200 bytes)
+      const CHUNK_SIZE = 3200;
+      const totalChunks = Math.ceil(pcm.byteLength / CHUNK_SIZE);
+      console.log(`[SpatialReal] Streaming ${pcm.byteLength}b as ${totalChunks} chunks`);
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, pcm.byteLength);
+        const chunk = pcm.slice(start, end);
+        const isLast = i === totalChunks - 1 && isFinal;
+
+        // Send each chunk with a small delay to simulate real-time streaming
+        setTimeout(() => {
+          try {
+            avatarViewInstance.controller.send(chunk, isLast);
+          } catch (err) {
+            console.error('[SpatialReal] Send error:', err);
+          }
+        }, i * 100); // 100ms per chunk = real-time 16kHz playback rate
       }
     };
     window.addEventListener('spatialreal:audio', handler);
