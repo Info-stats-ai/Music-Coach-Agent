@@ -1,24 +1,23 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 
 /**
- * SpatialReal Avatar — SDK Mode.
- * Dynamically imports @spatialwalk/avatarkit to avoid crashing if SDK has issues.
- * Receives TTS audio via CustomEvent and forwards to avatar for lip-sync.
+ * SpatialReal Avatar — follows their Speech-to-Avatar quickstart exactly.
+ * SDK init → set token → load avatar → create AvatarView → start controller → send PCM
  */
 
-type SpatialRealStatus = 'idle' | 'initializing' | 'connecting' | 'connected' | 'error';
+type Status = 'idle' | 'initializing' | 'loading' | 'connecting' | 'connected' | 'error';
 
+// Module-level so it persists across re-renders
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let sdk: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let avatarViewInstance: any = null;
+let avatarView: any = null;
+let isConnectedFlag = false;
 
 export function SpatialRealAvatar() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<SpatialRealStatus>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const autoConnectDone = useRef(false);
+  const [status, setStatus] = useState<Status>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const connectAttempted = useRef(false);
 
   const emotion = useAppStore((s) => s.currentEmotion);
   const isSpeaking = useAppStore((s) => s.isSpeaking);
@@ -29,65 +28,82 @@ export function SpatialRealAvatar() {
   const isConfigured = Boolean(appId && avatarId && sessionToken);
 
   const connect = useCallback(async () => {
-    if (!isConfigured || !containerRef.current) return;
+    if (!containerRef.current || !isConfigured) return;
     if (status === 'connecting' || status === 'connected') return;
 
     try {
       setStatus('initializing');
+      console.log('[SpatialReal] Starting connection...');
 
-      // Dynamic import to avoid breaking the app if SDK fails
-      if (!sdk) {
-        sdk = await import('@spatialwalk/avatarkit');
-      }
-
+      // Dynamic import
+      const sdk = await import('@spatialwalk/avatarkit');
       const { AvatarSDK, AvatarManager, AvatarView, Environment, DrivingServiceMode } = sdk;
 
       if (!AvatarSDK.isInitialized) {
+        console.log('[SpatialReal] Initializing SDK...');
         await AvatarSDK.initialize(appId, {
           environment: Environment.intl,
           drivingServiceMode: DrivingServiceMode.sdk,
         });
       }
+
       AvatarSDK.setSessionToken(sessionToken);
 
+      // Wait a tick for DOM to be ready (matching their Vue nextTick pattern)
+      await new Promise((r) => requestAnimationFrame(r));
+
+      const mountEl = containerRef.current;
+      if (!mountEl) throw new Error('Container not ready');
+
+      if (!avatarView) {
+        setStatus('loading');
+        console.log('[SpatialReal] Loading avatar:', avatarId);
+        const avatar = await AvatarManager.shared.load(avatarId);
+
+        avatarView = new AvatarView(avatar, mountEl);
+        avatarView.controller.onConnectionState = (state: string) => {
+          console.log('[SpatialReal] Connection state:', state);
+          isConnectedFlag = state === 'connected';
+          if (state === 'connected') setStatus('connected');
+        };
+      }
+
       setStatus('connecting');
-      const avatar = await AvatarManager.shared.load(avatarId);
-      const view = new AvatarView(avatar, containerRef.current);
+      console.log('[SpatialReal] Starting controller...');
+      await avatarView.controller.initializeAudioContext();
+      await avatarView.controller.start();
 
-      view.controller.onConnectionState = (state: string) => {
-        if (state === 'connected') setStatus('connected');
-        if (state === 'disconnected') setStatus('idle');
-      };
+      // Wait for connection like their demo does
+      await new Promise((r) => setTimeout(r, 300));
 
-      await view.controller.initializeAudioContext();
-      await view.controller.start();
-      await new Promise((r) => setTimeout(r, 500));
+      if (!isConnectedFlag) {
+        throw new Error('Failed to connect to animation channel');
+      }
 
-      avatarViewInstance = view;
       setStatus('connected');
-      (window as unknown as { __spatialRealConnected: boolean }).__spatialRealConnected = true;
-      console.log('[SpatialReal] ✓ Avatar connected');
+      console.log('[SpatialReal] ✓ Connected!');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Connection failed';
-      console.error('[SpatialReal] Error:', msg);
-      setError(msg);
+      console.error('[SpatialReal] Error:', msg, err);
+      setErrorMsg(msg);
       setStatus('error');
     }
   }, [isConfigured, appId, avatarId, sessionToken, status]);
 
-  // Auto-connect once
+  // Auto-connect once after mount
   useEffect(() => {
-    if (isConfigured && status === 'idle' && !autoConnectDone.current) {
-      autoConnectDone.current = true;
-      connect();
+    if (isConfigured && !connectAttempted.current && containerRef.current) {
+      connectAttempted.current = true;
+      // Small delay to ensure container is rendered
+      setTimeout(() => connect(), 500);
     }
-  }, [isConfigured, status, connect]);
+  }, [isConfigured, connect]);
 
-  // Forward TTS audio to avatar for lip-sync
+  // Forward TTS PCM audio to avatar
   useEffect(() => {
     const handler = (e: Event) => {
       const { audio, isFinal } = (e as CustomEvent).detail;
-      if (!avatarViewInstance) return;
+      if (!avatarView || !isConnectedFlag) return;
 
       let pcm: ArrayBuffer;
       if (audio instanceof ArrayBuffer) {
@@ -99,23 +115,25 @@ export function SpatialRealAvatar() {
       }
 
       try {
-        avatarViewInstance.controller.send(pcm, isFinal);
+        avatarView.controller.send(pcm, isFinal);
+        console.log(`[SpatialReal] Sent ${pcm.byteLength}b, final=${isFinal}`);
       } catch (err) {
-        console.error('[SpatialReal] Send error:', err);
+        console.error('[SpatialReal] Send failed:', err);
       }
     };
     window.addEventListener('spatialreal:audio', handler);
     return () => window.removeEventListener('spatialreal:audio', handler);
-  }, [status]);
+  }, []);
 
   // Cleanup
   useEffect(() => {
     return () => {
       try {
-        avatarViewInstance?.controller?.close();
-        avatarViewInstance?.dispose();
+        avatarView?.controller?.close();
+        avatarView?.dispose();
       } catch { /* ignore */ }
-      avatarViewInstance = null;
+      avatarView = null;
+      isConnectedFlag = false;
     };
   }, []);
 
@@ -139,20 +157,18 @@ export function SpatialRealAvatar() {
       {(status === 'idle' || status === 'error') && isConfigured && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 gap-3">
           <button
-            onClick={connect}
+            onClick={() => { connectAttempted.current = false; connect(); }}
             className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm font-medium transition-colors"
           >
-            Connect SpatialReal Avatar
+            {status === 'error' ? 'Retry Connection' : 'Connect Avatar'}
           </button>
-          {error && <p className="text-red-400 text-xs px-4 text-center">{error}</p>}
+          {errorMsg && <p className="text-red-400 text-xs px-4 text-center">{errorMsg}</p>}
         </div>
       )}
 
       {!isConfigured && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-          <p className="text-gray-500 text-xs px-4 text-center">
-            SpatialReal not configured — set env vars
-          </p>
+          <p className="text-gray-500 text-xs">SpatialReal not configured</p>
         </div>
       )}
     </div>
