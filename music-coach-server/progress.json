@@ -71,6 +71,18 @@
       "coachNotes": "Session lasted 0 min with 2 exchanges.",
       "sessionDurationMinutes": 0,
       "timestamp": 1777248846772
+    },
+    {
+      "userId": "user_default",
+      "instrument": "guitar",
+      "lessonId": "guitar-1-1",
+      "lessonTitle": "guitar-1-1",
+      "skillsWorkedOn": [],
+      "skillsPassed": [],
+      "skillsNeedWork": [],
+      "coachNotes": "Session lasted 5 min with 24 exchanges.",
+      "sessionDurationMinutes": 5,
+      "timestamp": 1777249418573
     }
   ],
   "skills": []

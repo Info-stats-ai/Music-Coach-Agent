@@ -67,9 +67,9 @@ socket.on('tts_pcm_final', (chunk: ArrayBuffer) => {
   );
 });
 
-// WAV audio → NOT played in browser. SpatialReal handles all audio output.
-socket.on('tts_wav', () => {
-  // intentionally empty — SpatialReal plays audio via controller.send()
+// WAV audio → browser plays the voice
+socket.on('tts_wav', (wav: ArrayBuffer) => {
+  playMp3(wav);
 });
 
 socket.on('tts_start', () => useAppStore.getState().setSpeaking(true));
