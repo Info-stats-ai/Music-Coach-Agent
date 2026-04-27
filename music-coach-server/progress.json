@@ -47,6 +47,30 @@
       "coachNotes": "Session lasted 3 min with 18 exchanges.",
       "sessionDurationMinutes": 3,
       "timestamp": 1777248690400
+    },
+    {
+      "userId": "user_default",
+      "instrument": "",
+      "lessonId": "",
+      "lessonTitle": "Free practice",
+      "skillsWorkedOn": [],
+      "skillsPassed": [],
+      "skillsNeedWork": [],
+      "coachNotes": "Session lasted 0 min with 2 exchanges.",
+      "sessionDurationMinutes": 0,
+      "timestamp": 1777248829558
+    },
+    {
+      "userId": "user_default",
+      "instrument": "cello",
+      "lessonId": "",
+      "lessonTitle": "Free practice",
+      "skillsWorkedOn": [],
+      "skillsPassed": [],
+      "skillsNeedWork": [],
+      "coachNotes": "Session lasted 0 min with 2 exchanges.",
+      "sessionDurationMinutes": 0,
+      "timestamp": 1777248846772
     }
   ],
   "skills": []

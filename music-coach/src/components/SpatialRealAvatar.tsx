@@ -87,13 +87,24 @@ export function SpatialRealAvatar() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { audio, isFinal } = (e as CustomEvent).detail;
-      console.log(`[SpatialReal] Audio event: ${audio?.byteLength || 0}b, final=${isFinal}, avatar=${!!avatarViewInstance}, status=${status}`);
       if (avatarViewInstance) {
         try {
-          avatarViewInstance.controller.send(audio, isFinal);
+          // Ensure audio is ArrayBuffer (Socket.io may send as Buffer/Uint8Array)
+          let pcmBuffer: ArrayBuffer;
+          if (audio instanceof ArrayBuffer) {
+            pcmBuffer = audio;
+          } else if (audio instanceof Uint8Array || ArrayBuffer.isView(audio)) {
+            pcmBuffer = audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength);
+          } else {
+            pcmBuffer = new Uint8Array(audio).buffer;
+          }
+          console.log(`[SpatialReal] Sending ${pcmBuffer.byteLength}b PCM, final=${isFinal}`);
+          avatarViewInstance.controller.send(pcmBuffer, isFinal);
         } catch (err) {
           console.error('[SpatialReal] Send failed:', err);
         }
+      } else {
+        console.warn('[SpatialReal] No avatar instance, audio dropped');
       }
     };
     window.addEventListener('spatialreal:audio', handler);
