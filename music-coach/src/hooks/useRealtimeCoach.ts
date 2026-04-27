@@ -54,7 +54,7 @@ socket.on('coach_response', (data: CoachResponse) => {
   });
 });
 
-// PCM audio → SpatialReal for lip-sync
+// PCM audio → SpatialReal ONLY (it handles lip-sync + audio playback)
 socket.on('tts_pcm_chunk', (chunk: ArrayBuffer) => {
   window.dispatchEvent(
     new CustomEvent('spatialreal:audio', { detail: { audio: chunk, isFinal: false } })
@@ -67,17 +67,8 @@ socket.on('tts_pcm_final', (chunk: ArrayBuffer) => {
   );
 });
 
-// WAV audio → browser plays the voice
-socket.on('tts_wav', (wav: ArrayBuffer) => {
-  console.log('[Coach] tts_wav received:', wav?.byteLength || 0, 'bytes');
-  playMp3(wav);
-});
-
 socket.on('tts_start', () => useAppStore.getState().setSpeaking(true));
 socket.on('tts_end', () => useAppStore.getState().setSpeaking(false));
-
-    // No browser TTS — SpatialReal handles all audio
-    socket.on('use_browser_tts', () => {});
 
 socket.on('expression_change', (data: { emotion: EmotionType }) => {
   useAppStore.getState().setEmotion(data.emotion);
@@ -181,28 +172,4 @@ export function useRealtimeCoach() {
     isConnected: useAppStore((s) => s.isConnected),
     isListening: useAppStore((s) => s.isListening),
   };
-}
-
-// ─── Play WAV/mp3 audio buffer in browser ───
-let audioCtx: AudioContext | null = null;
-
-async function playMp3(chunk: ArrayBuffer) {
-  try {
-    if (!audioCtx || audioCtx.state === 'closed') {
-      audioCtx = new AudioContext();
-    }
-    // Resume if suspended (browser autoplay policy)
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume();
-    }
-    const copy = chunk.slice(0);
-    const buffer = await audioCtx.decodeAudioData(copy);
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtx.destination);
-    source.start();
-    console.log('[Coach] 🔊 Playing', Math.round(buffer.duration * 10) / 10, 's');
-  } catch (err) {
-    console.error('[Coach] Audio play failed:', err);
-  }
 }

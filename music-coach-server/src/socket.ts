@@ -133,17 +133,15 @@ export function setupSocketHandlers(io: Server) {
           console.log(`[Skill] ${skillId}: ${passed ? 'PASSED ✓' : 'NEEDS WORK ✗'}`);
         }
 
-        // TTS → PCM to SpatialReal for lip-sync, WAV to browser for playback
+        // TTS → ONLY PCM to SpatialReal. No browser playback.
         socket.emit('tts_start');
         const ttsResult = await streamTTS(
           coachResult.text,
           (pcmChunk, isFinal) => {
-            // Raw PCM → SpatialReal avatar lip-sync
             socket.emit(isFinal ? 'tts_pcm_final' : 'tts_pcm_chunk', pcmChunk);
           },
-          (wav) => {
-            // WAV → browser audio playback
-            socket.emit('tts_wav', wav);
+          () => {
+            // WAV not used — SpatialReal handles audio playback
           }
         );
         socket.emit('tts_end');
