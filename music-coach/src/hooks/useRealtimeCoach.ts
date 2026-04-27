@@ -69,6 +69,7 @@ socket.on('tts_pcm_final', (chunk: ArrayBuffer) => {
 
 // WAV audio → browser plays the voice
 socket.on('tts_wav', (wav: ArrayBuffer) => {
+  console.log('[Coach] tts_wav received:', wav?.byteLength || 0, 'bytes');
   playMp3(wav);
 });
 
@@ -182,22 +183,26 @@ export function useRealtimeCoach() {
   };
 }
 
-// ─── Play mp3 audio buffer in browser ───
+// ─── Play WAV/mp3 audio buffer in browser ───
 let audioCtx: AudioContext | null = null;
 
-function playMp3(chunk: ArrayBuffer) {
-  if (!audioCtx || audioCtx.state === 'closed') {
-    audioCtx = new AudioContext();
-  }
-  // Clone the buffer since decodeAudioData detaches it
-  const copy = chunk.slice(0);
-  audioCtx.decodeAudioData(copy).then((buffer) => {
-    const source = audioCtx!.createBufferSource();
+async function playMp3(chunk: ArrayBuffer) {
+  try {
+    if (!audioCtx || audioCtx.state === 'closed') {
+      audioCtx = new AudioContext();
+    }
+    // Resume if suspended (browser autoplay policy)
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+    const copy = chunk.slice(0);
+    const buffer = await audioCtx.decodeAudioData(copy);
+    const source = audioCtx.createBufferSource();
     source.buffer = buffer;
-    source.connect(audioCtx!.destination);
+    source.connect(audioCtx.destination);
     source.start();
-    console.log('[Coach] 🔊 Playing audio', Math.round(buffer.duration * 10) / 10, 's');
-  }).catch((err) => {
-    console.error('[Coach] Audio decode failed:', err);
-  });
+    console.log('[Coach] 🔊 Playing', Math.round(buffer.duration * 10) / 10, 's');
+  } catch (err) {
+    console.error('[Coach] Audio play failed:', err);
+  }
 }
