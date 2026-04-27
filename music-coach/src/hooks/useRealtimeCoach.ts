@@ -67,29 +67,16 @@ socket.on('tts_pcm_final', (chunk: ArrayBuffer) => {
   );
 });
 
-// WAV audio → browser playback (only if SpatialReal is NOT connected)
-socket.on('tts_wav', (wav: ArrayBuffer) => {
-  const win = window as unknown as { __spatialRealConnected?: boolean };
-  if (!win.__spatialRealConnected) {
-    playMp3(wav); // WAV is also decodable by decodeAudioData
-  }
+// WAV audio → NOT played in browser. SpatialReal handles all audio output.
+socket.on('tts_wav', () => {
+  // intentionally empty — SpatialReal plays audio via controller.send()
 });
 
 socket.on('tts_start', () => useAppStore.getState().setSpeaking(true));
 socket.on('tts_end', () => useAppStore.getState().setSpeaking(false));
 
-    // Browser TTS fallback — only when SpatialReal is NOT connected
-    socket.on('use_browser_tts', (data: { text: string }) => {
-      const win = window as unknown as { __spatialRealConnected?: boolean };
-      if (win.__spatialRealConnected) return; // SpatialReal handles audio
-      console.log('[Coach] Browser TTS fallback');
-      useAppStore.getState().setSpeaking(true);
-      const utterance = new SpeechSynthesisUtterance(data.text);
-      utterance.rate = 1.0;
-      utterance.onend = () => useAppStore.getState().setSpeaking(false);
-      utterance.onerror = () => useAppStore.getState().setSpeaking(false);
-      speechSynthesis.speak(utterance);
-    });
+    // No browser TTS — SpatialReal handles all audio
+    socket.on('use_browser_tts', () => {});
 
 socket.on('expression_change', (data: { emotion: EmotionType }) => {
   useAppStore.getState().setEmotion(data.emotion);

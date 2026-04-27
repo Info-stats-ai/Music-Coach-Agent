@@ -87,11 +87,12 @@ export function SpatialRealAvatar() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { audio, isFinal } = (e as CustomEvent).detail;
-      if (avatarViewInstance && status === 'connected') {
+      console.log(`[SpatialReal] Audio event: ${audio?.byteLength || 0}b, final=${isFinal}, avatar=${!!avatarViewInstance}, status=${status}`);
+      if (avatarViewInstance) {
         try {
           avatarViewInstance.controller.send(audio, isFinal);
-        } catch {
-          // ignore send errors
+        } catch (err) {
+          console.error('[SpatialReal] Send failed:', err);
         }
       }
     };

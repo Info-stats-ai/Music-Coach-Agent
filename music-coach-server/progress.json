@@ -35,6 +35,18 @@
       "coachNotes": "Session lasted 4 min with 23 exchanges.",
       "sessionDurationMinutes": 4,
       "timestamp": 1777247023059
+    },
+    {
+      "userId": "user_default",
+      "instrument": "flute",
+      "lessonId": "",
+      "lessonTitle": "Free practice",
+      "skillsWorkedOn": [],
+      "skillsPassed": [],
+      "skillsNeedWork": [],
+      "coachNotes": "Session lasted 3 min with 18 exchanges.",
+      "sessionDurationMinutes": 3,
+      "timestamp": 1777248690400
     }
   ],
   "skills": []
