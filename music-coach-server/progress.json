@@ -131,6 +131,18 @@
       "coachNotes": "Session lasted 1 min with 5 exchanges.",
       "sessionDurationMinutes": 1,
       "timestamp": 1777252531998
+    },
+    {
+      "userId": "user_default",
+      "instrument": "",
+      "lessonId": "",
+      "lessonTitle": "Free practice",
+      "skillsWorkedOn": [],
+      "skillsPassed": [],
+      "skillsNeedWork": [],
+      "coachNotes": "Session lasted 0 min with 2 exchanges.",
+      "sessionDurationMinutes": 0,
+      "timestamp": 1777253232850
     }
   ],
   "skills": []
